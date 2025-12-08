@@ -374,10 +374,10 @@ def update_plot(ax_gamma, ax_volume, fig, df, filter_type, filter_value, current
     # Create horizontal bar chart for gamma exposure
     if not positive_df.empty:
         ax_gamma.barh(positive_df['Strike'], positive_df['Net_Gamma_Exposure'],
-                      color='#4ade80', alpha=0.7, height=3.5, label='Positive Gamma')
+                      color='#4ade80', alpha=0.7, height=100, label='Positive Gamma')
     if not negative_df.empty:
         ax_gamma.barh(negative_df['Strike'], negative_df['Net_Gamma_Exposure'],
-                      color='#f87171', alpha=0.7, height=3.5, label='Negative Gamma')
+                      color='#f87171', alpha=0.7, height=100, label='Negative Gamma')
 
     # Add lines and labels for gamma plot
     ax_gamma.axvline(x=0, color='white', linestyle='-', alpha=0.3)
@@ -410,8 +410,8 @@ def update_plot(ax_gamma, ax_volume, fig, df, filter_type, filter_value, current
     ax_gamma.set_title(
         'SPX Gamma Exposure{title_suffix}', fontsize=20, color='white', pad=20)
 
-    # Major ticks every 50 units
-    ax_gamma.yaxis.set_major_locator(ticker.MultipleLocator(5))
+    # Major ticks every 125 units
+    ax_gamma.yaxis.set_major_locator(ticker.MultipleLocator(125))
 
     # Enable grid lines
     ax_gamma.grid(True, which='major', linestyle='-',
@@ -426,7 +426,7 @@ def update_plot(ax_gamma, ax_volume, fig, df, filter_type, filter_value, current
 
     # Create horizontal bar chart for volume/OI
     ax_volume.barh(strike_gamma['Strike'], volume_data,
-                   color='#60d5fa', alpha=0.7, height=3.5)
+                   color='#60d5fa', alpha=0.7, height=100)
 
     # Add current price line to volume plot
     if current_price is not None:

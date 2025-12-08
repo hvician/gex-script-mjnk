@@ -24,9 +24,10 @@ row_num = soup.find_all(class_="row-num")
 greek_table_wrapper = soup.find_all(class_=["greek", "show"])
 
 # Extract the expiration date from the specified table
-date_table = soup.find(class_=["date-table", "last-tradingday"])
+date_table = soup.find(class_="last-tradingday")
 
 expiration_date = date_table.find("dl").find("dd").text  # YYYY/MM/DD
+safe_date = expiration_date.replace("/", "-")
 print(expiration_date)
 
 print(len(row_num))
@@ -38,10 +39,10 @@ fieldnames = ['Expiration Date', 'Calls', 'Last Sale', 'Net', 'Bid', 'Ask', 'Vol
               'Open Interest', 'Strike', 'Puts', 'Last Sale', 'Net', 'Bid', 'Ask', 'Volume', 'IV', 'Delta', 'Gamma', 'Open Interest']
 
 # need a for loop len(row_num) times
-with open("jpx_options_chain.csv", "w", newline="", encoding="utf-8") as csvfile:
-    csvwriter = csv.DictWriter(csvfile, fieldnames=fieldnames)
+with open("jpx.csv", "w", newline="", encoding="utf-8") as csvfile:
+    csvwriter = csv.writer(csvfile)
     # Write header
-    csvwriter.writeheader()
+    csvwriter.writerow(fieldnames)
 
     for i in range(len(row_num)):
         row_num_tds = row_num[i].find_all("td")
@@ -77,7 +78,7 @@ with open("jpx_options_chain.csv", "w", newline="", encoding="utf-8") as csvfile
         record.append(0)  # Ask
         record.append(
             # Volume
-            int(row_num_tds[14].text.strip().replace('-', '0').strip()))
+            parse_number(row_num_tds[14].text.strip().replace('-', '0').strip()))
         record.append(0)  # IV
         record.append(float(parse_decimal(
             putGreeks[0].text.strip().replace('-', '0'))))  # Delta
@@ -86,6 +87,6 @@ with open("jpx_options_chain.csv", "w", newline="", encoding="utf-8") as csvfile
         record.append(parse_number(row_num_tds[15].text.strip().replace(
             '-', '0')))  # Open Interest
 
-        print(record)
+        # print(record)
 
-        # csvwriter.writerow([expiration_date, row_num_text, greek_show_text])
+        csvwriter.writerow(record)
