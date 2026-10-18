@@ -1,7 +1,23 @@
 from bs4 import BeautifulSoup
-from babel.numbers import parse_number
 from babel.numbers import parse_decimal
 import csv
+
+MISSING = ""   # JPX prints "-" for cells with no quote; keep them empty in the CSV
+               # so downstream code can tell "no quote" from a genuine zero.
+
+
+def num(text):
+    """Parse a JPX numeric cell, returning MISSING for an empty/'-' cell.
+
+    The original code did text.replace('-', '0'), which also mangled negative
+    values ("-0.4567" became "00.4567", i.e. a sign flip) and turned missing
+    quotes into real zeros.
+    """
+    text = text.strip()
+    if text in ("", "-", "\u2212", "\u2014"):
+        return MISSING
+    return float(parse_decimal(text.replace(",", "")))
+
 
 # Open and read the local HTML file
 with open("jpx_options_chain.html", "r", encoding="utf-8") as file:
@@ -53,39 +69,30 @@ with open("jpx.csv", "w", newline="", encoding="utf-8") as csvfile:
         callGreeks = tb[0].find_all("td", class_="a-right")
         putGreeks = tb[1].find_all("td", class_="a-right")
 
-        record = []
-        record.append(expiration_date)
-        record.append("c")   # Calls
-        record.append(0)  # Last Sale
-        record.append(0)  # Net
-        record.append(0)  # Bid
-        record.append(0)  # Ask
-        record.append(parse_number(row_num_tds[2].text.strip().replace(
-            '-', '0')))  # Volume
-        record.append(0)  # IV
-        record.append(float(parse_decimal(
-            callGreeks[0].text.strip().replace('-', '0'))))  # Delta
-        record.append(float(parse_decimal(
-            callGreeks[1].text.strip().replace('-', '0'))))  # Gamma
-        record.append(parse_number(row_num_tds[1].text.strip().replace(
-            '-', '0')))  # Open Interest
-        record.append(parse_number(
-            row_num_tds[8].text.strip()))  # Strike
-        record.append("p")   # Puts
-        record.append(0)  # Last Sale
-        record.append(0)  # Net
-        record.append(0)  # Bi
-        record.append(0)  # Ask
-        record.append(
-            # Volume
-            parse_number(row_num_tds[14].text.strip().replace('-', '0').strip()))
-        record.append(0)  # IV
-        record.append(float(parse_decimal(
-            putGreeks[0].text.strip().replace('-', '0'))))  # Delta
-        record.append(float(parse_decimal(
-            putGreeks[1].text.strip().replace('-', '0'))))  # Gamma
-        record.append(parse_number(row_num_tds[15].text.strip().replace(
-            '-', '0')))  # Open Interest
+        record = [
+            expiration_date,
+            "c",                       # Calls
+            0,                         # Last Sale
+            0,                         # Net
+            0,                         # Bid
+            0,                         # Ask
+            num(row_num_tds[2].text),   # Volume
+            0,                         # IV
+            num(callGreeks[0].text),    # Delta
+            num(callGreeks[1].text),    # Gamma
+            num(row_num_tds[1].text),   # Open Interest
+            num(row_num_tds[8].text),   # Strike
+            "p",                       # Puts
+            0,                         # Last Sale
+            0,                         # Net
+            0,                         # Bid
+            0,                         # Ask
+            num(row_num_tds[14].text),  # Volume
+            0,                         # IV
+            num(putGreeks[0].text),     # Delta
+            num(putGreeks[1].text),     # Gamma
+            num(row_num_tds[15].text),  # Open Interest
+        ]
 
         # print(record)
 
