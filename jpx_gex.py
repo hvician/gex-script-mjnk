@@ -349,6 +349,16 @@ def _symmetric_limit(values):
     return limit * 1.1 if limit > 0 else 1.0
 
 
+# Shared by the axis tick formatters below and the crosshair's live value
+# labels, so the hover readout always matches what the axis itself shows.
+def _fmt_number(value):
+    return f"{value:,.0f}"
+
+
+def _fmt_gex(value):
+    return f"{value / 1e9:+.1f}B"
+
+
 def draw(fig, ax_gex, ax_vol, df, spot, label, multiplier):
     ax_gex.clear()
     ax_vol.clear()
@@ -392,25 +402,31 @@ def draw(fig, ax_gex, ax_vol, df, spot, label, multiplier):
         ax_vol.axhline(level, color=color, linestyle="--", linewidth=2, alpha=0.5)
 
     ax_gex.set_xlim(-x_limit, x_limit)
-    ax_gex.set_xlabel("Net gamma exposure (¥ per 1% move)", fontsize=18, color="white")
-    ax_gex.set_ylabel("Strike", fontsize=18, color="white")
+    ax_gex.set_xlabel("Net gamma exposure (¥ per 1% move)", fontsize=18, color="white", labelpad=12)
+    ax_gex.set_ylabel("Strike", fontsize=18, color="white", labelpad=12)
     ax_gex.set_title(f"Nikkei 225 gamma exposure — {label}", fontsize=22,
                      color="white", pad=18)
     # Label every strike line rather than thinning to ~20 ticks.
     ax_gex.yaxis.set_major_locator(ticker.MultipleLocator(_strike_spacing(strikes)))
-    ax_gex.xaxis.set_major_formatter(ticker.FuncFormatter(lambda v, _: f"{v / 1e9:+.1f}B"))
+    strike_formatter = ticker.FuncFormatter(lambda v, _: _fmt_number(v))
+    ax_gex.yaxis.set_major_formatter(strike_formatter)
+    ax_vol.yaxis.set_major_formatter(strike_formatter)
+    ax_gex.xaxis.set_major_formatter(ticker.FuncFormatter(lambda v, _: _fmt_gex(v)))
+    ax_vol.xaxis.set_major_formatter(ticker.FuncFormatter(lambda v, _: _fmt_number(v)))
 
     use_volume = by_strike["Total_Volume"].sum() > 0
     bars = by_strike["Total_Volume"] if use_volume else by_strike["Total_OI"]
     bar_label = "Total volume" if use_volume else "Total open interest"
     ax_vol.barh(strikes, bars.to_numpy(float), color="#60d5fa", alpha=0.75, height=height)
-    ax_vol.set_xlabel(bar_label, fontsize=18, color="white")
+    ax_vol.set_xlabel(bar_label, fontsize=18, color="white", labelpad=12)
     ax_vol.set_title(f"{bar_label} — {label}", fontsize=22, color="white", pad=18)
     ax_vol.set_ylim(ax_gex.get_ylim())
 
     for ax in (ax_gex, ax_vol):
         ax.grid(True, alpha=0.2, color="white")
-        ax.tick_params(colors="white", labelsize=15)
+        ax.tick_params(colors="white", labelsize=15, pad=8)
+        for tick_label in ax.get_xticklabels() + ax.get_yticklabels():
+            tick_label.set_family("monospace")
         for spine in ax.spines.values():
             spine.set_color("white")
             spine.set_alpha(0.5)
@@ -428,8 +444,91 @@ def draw(fig, ax_gex, ax_vol, df, spot, label, multiplier):
     fig.canvas.draw_idle()
 
 
+CROSSHAIR_STYLE = dict(color="white", linewidth=1, linestyle=":", alpha=0.7)
+CROSSHAIR_LABEL_BBOX = dict(boxstyle="round,pad=0.25", facecolor="white",
+                            edgecolor="none", alpha=0.9)
+
+
+def attach_crosshair(fig, ax_gex, ax_vol):
+    """Wire up a hover crosshair with live value labels on both axes.
+
+    matplotlib.widgets.MultiCursor draws synced lines but has no hook for
+    labels, so this reimplements that part directly: a horizontal line
+    tracking strike is mirrored onto both panels (they share the same
+    y-range), a vertical line tracks whichever panel's x-value (gamma
+    exposure or volume) is under the mouse, and each gets a small badge
+    showing the exact number rather than making you read it off the grid.
+
+    Returns the event-handler connection ids; draw() clears both axes on
+    every redraw (expiry switch via the radio buttons), which strips out
+    whatever artists this attached last time, so the caller must call this
+    again after every draw() and disconnect the ids this returns first.
+    """
+    axes = (ax_gex, ax_vol)
+    value_fmt = {ax_gex: _fmt_gex, ax_vol: _fmt_number}
+
+    vlines, hlines, strike_label, value_labels = {}, {}, None, {}
+    for ax in axes:
+        vlines[ax] = ax.axvline(ax.get_xlim()[0], visible=False, **CROSSHAIR_STYLE)
+        hlines[ax] = ax.axhline(ax.get_ylim()[0], visible=False, **CROSSHAIR_STYLE)
+        # Value badge just under each panel's own x-axis, in data coordinates
+        # for x (tracks the cursor) and axes-fraction for y (stays put).
+        value_labels[ax] = ax.text(0.5, -0.012, "", transform=ax.get_xaxis_transform(),
+                                   ha="center", va="top", fontsize=20, fontweight="bold",
+                                   color="black", bbox=CROSSHAIR_LABEL_BBOX,
+                                   visible=False, clip_on=False)
+
+    # One strike badge (not one per panel) since both panels show the same
+    # strike; putting it on the wide left panel keeps it clear of the
+    # narrow gap between the two.
+    strike_label = ax_gex.text(-0.012, 0.5, "", transform=ax_gex.get_yaxis_transform(),
+                               ha="right", va="center", fontsize=20, fontweight="bold",
+                               color="black", bbox=CROSSHAIR_LABEL_BBOX,
+                               visible=False, clip_on=False)
+
+    def hide_all():
+        for ax in axes:
+            vlines[ax].set_visible(False)
+            hlines[ax].set_visible(False)
+            value_labels[ax].set_visible(False)
+        strike_label.set_visible(False)
+
+    def on_move(event):
+        hovered = event.inaxes if event.inaxes in axes else None
+        if hovered is None or event.xdata is None or event.ydata is None:
+            hide_all()
+            fig.canvas.draw_idle()
+            return
+
+        for ax in axes:
+            hlines[ax].set_ydata((event.ydata, event.ydata))
+            hlines[ax].set_visible(True)
+            is_hovered = ax is hovered
+            vlines[ax].set_visible(is_hovered)
+            value_labels[ax].set_visible(is_hovered)
+            if is_hovered:
+                vlines[ax].set_xdata((event.xdata, event.xdata))
+                value_labels[ax].set_position((event.xdata, -0.012))
+                value_labels[ax].set_text(value_fmt[ax](event.xdata))
+
+        strike_label.set_visible(True)
+        strike_label.set_position((-0.012, event.ydata))
+        strike_label.set_text(_fmt_number(event.ydata))
+        fig.canvas.draw_idle()
+
+    def on_leave(_event):
+        hide_all()
+        fig.canvas.draw_idle()
+
+    return [
+        fig.canvas.mpl_connect("motion_notify_event", on_move),
+        fig.canvas.mpl_connect("figure_leave_event", on_leave),
+    ]
+
+
 def show(df, spot, multiplier):
     plt.style.use("dark_background")
+    plt.rcParams["font.family"] = "monospace"
     # Tall figure so every strike can get its own labelled gridline at a
     # readable font size instead of matplotlib thinning the ticks.
     fig, (ax_gex, ax_vol) = plt.subplots(
@@ -439,9 +538,17 @@ def show(df, spot, multiplier):
     expiries = sorted(df["Expiry"].unique())
     labels = (["All expiries"] + expiries) if len(expiries) > 1 else expiries
 
+    # draw() clears both axes on every redraw, which also wipes out any
+    # crosshair artists already sitting on them, so it has to be
+    # reattached after each draw() rather than once up front.
+    crosshair_cids = []
+
     def render(label):
         subset = df if label == "All expiries" else df[df["Expiry"] == label]
         draw(fig, ax_gex, ax_vol, subset, spot, label, multiplier)
+        for cid in crosshair_cids:
+            fig.canvas.mpl_disconnect(cid)
+        crosshair_cids[:] = attach_crosshair(fig, ax_gex, ax_vol)
 
     render(labels[0])
     fig.tight_layout(rect=(0.0, 0.03, 1.0, 1.0))
