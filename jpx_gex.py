@@ -419,7 +419,9 @@ def draw(fig, ax_gex, ax_vol, df, spot, label, multiplier):
     bar_label = "Total volume" if use_volume else "Total open interest"
     ax_vol.barh(strikes, bars.to_numpy(float), color="#60d5fa", alpha=0.75, height=height)
     ax_vol.set_xlabel(bar_label, fontsize=18, color="white", labelpad=12)
-    ax_vol.set_title(f"{bar_label} — {label}", fontsize=22, color="white", pad=18)
+    # The expiry is already in the GEX title; repeating it here overflows
+    # the narrow right panel past the figure edge.
+    ax_vol.set_title(bar_label, fontsize=22, color="white", pad=18)
     ax_vol.set_ylim(ax_gex.get_ylim())
 
     for ax in (ax_gex, ax_vol):
@@ -555,8 +557,12 @@ def show(df, spot, multiplier):
 
     radio = None
     if len(labels) > 1:
-        fig.subplots_adjust(left=0.18)
-        ax_radio = fig.add_axes((0.01, 0.4, 0.14, 0.2), facecolor="#2A2A2A")
+        # tight_layout has just sized the left margin to fit the strike
+        # tick labels and axis title; widen it by the selector's width so
+        # the selector sits beside them rather than on top of them.
+        radio_x, radio_width, gap = 0.01, 0.12, 0.01
+        fig.subplots_adjust(left=radio_x + radio_width + gap + fig.subplotpars.left)
+        ax_radio = fig.add_axes((radio_x, 0.4, radio_width, 0.2), facecolor="#2A2A2A")
         radio = RadioButtons(ax_radio, labels)  # keep a reference or it is GC'd
         for text in radio.labels:
             text.set_fontsize(15)
