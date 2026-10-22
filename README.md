@@ -52,7 +52,7 @@ pip install requests beautifulsoup4 lxml babel pandas numpy scipy matplotlib
 
 ```
 python jpx_scraper.py              # fetch the chain -> jpx.csv
-python jpx_gex.py --multiplier 100 # summary + interactive chart
+python jpx_gex.py                  # summary + interactive chart
 ```
 
 `jpx_gex.py` options:
@@ -62,13 +62,13 @@ python jpx_gex.py --multiplier 100 # summary + interactive chart
 | `csv` | `jpx.csv` | Input chain CSV |
 | `--spot` | inferred | Underlying price |
 | `--asof` | today | Valuation date (`YYYY-MM-DD`), used for time to expiry |
-| `--multiplier` | `1000` | Contract multiplier in yen per index point |
+| `--multiplier` | `100` | Contract multiplier in yen per index point |
 | `--gamma {bs,file}` | `bs` | Rebuild gamma from delta, or use the published column |
 | `--no-plot` | off | Print the text summary only |
 
-> **Multiplier:** the default of 1000 is for standard Nikkei 225 options. The
-> scraper pulls **mini** options, which use a multiplier of 100. Pass
-> `--multiplier 100` to get correctly scaled yen figures for scraped data.
+> **Multiplier:** the default of 100 matches the Nikkei 225 **mini** options
+> that the scraper pulls. For a chain of standard Nikkei 225 options, pass
+> `--multiplier 1000`.
 
 The console summary lists total call, put and net GEX, the put/call
 open-interest ratio, the gamma flip, max pain, and the ten strikes with the

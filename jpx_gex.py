@@ -23,9 +23,9 @@ import pandas as pd
 from matplotlib.widgets import RadioButtons
 from scipy.stats import norm
 
-# JPX Nikkei 225 options are quoted per index point with a 1,000 yen multiplier
-# (Nikkei 225 mini options use 100).
-DEFAULT_MULTIPLIER = 1000
+# jpx_scraper.py pulls Nikkei 225 mini options, quoted per index point with a
+# 100 yen multiplier (standard Nikkei 225 options use 1,000).
+DEFAULT_MULTIPLIER = 100
 
 DATE_FORMATS = ("%Y/%m/%d", "%Y-%m-%d", "%m/%d/%Y", "%a %b %d %Y", "%d-%b-%Y")
 
