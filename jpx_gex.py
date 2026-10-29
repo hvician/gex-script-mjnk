@@ -1,7 +1,8 @@
 """Gamma exposure profile for JPX (Nikkei 225) option chains.
 
-Reads the CSV produced by jpx_scraper.py and plots dealer gamma exposure,
-the gamma flip level and max pain.
+Fetches the live Nikkei 225 mini option chain from JPX straight into a
+DataFrame and plots dealer gamma exposure, the gamma flip level and max pain.
+Pass --csv to work from a previously saved chain instead of fetching.
 
 The exchange publishes gamma rounded to 4 decimals.  For an underlying near
 65,000 the true gamma is O(1e-4), so that rounding collapses the whole chain
@@ -20,12 +21,33 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
 import pandas as pd
+import requests
+from bs4 import BeautifulSoup
 from matplotlib.widgets import RadioButtons
 from scipy.stats import norm
 
-# jpx_scraper.py pulls Nikkei 225 mini options, quoted per index point with a
+# The fetched chain is Nikkei 225 mini options, quoted per index point with a
 # 100 yen multiplier (standard Nikkei 225 options use 1,000).
 DEFAULT_MULTIPLIER = 100
+
+BASE_URL = "https://svc.qri.jp/jpx/english/nkopmini/"
+# Expiration pages at BASE_URL + path aren't sequential months of one series:
+# "" and "1" are JPX's two near-dated expirations (a weekly and the standard
+# one), "2" is the next weekly, etc.  "2"-"5" exist - add paths to pull more.
+EXPIRY_PATHS = ["", "1"]
+
+HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"),
+    # JPX's edge server 400s any request with no Referer (or one outside its
+    # own domain), with an error page telling you to access via the Japan
+    # Exchange Group website - this is exactly that entry point.
+    "Referer": "https://www.jpx.co.jp/english/",
+}
+
+CHAIN_COLUMNS = ["Expiry", "Strike",
+                 "Call_Volume", "Call_Delta", "Call_Gamma", "Call_OI",
+                 "Put_Volume", "Put_Delta", "Put_Gamma", "Put_OI"]
 
 DATE_FORMATS = ("%Y/%m/%d", "%Y-%m-%d", "%m/%d/%Y", "%a %b %d %Y", "%d-%b-%Y")
 
@@ -38,7 +60,121 @@ SIGMA_MIN, SIGMA_MAX = 0.05, 2.0
 
 
 # --------------------------------------------------------------------------
-# loading
+# fetching
+# --------------------------------------------------------------------------
+
+def num(text):
+    """Parse a JPX numeric cell, returning NaN for an empty/'-' cell.
+
+    A naive text.replace('-', '0') would also mangle negative values
+    ("-0.4567" becoming "00.4567", i.e. a sign flip) and turn missing quotes
+    into real zeros, so this checks for the dash explicitly instead.
+    """
+    text = text.strip()
+    if text in ("", "-", "−", "—"):
+        return np.nan
+    return float(text.replace(",", ""))
+
+
+def fetch_html(path, timeout=15):
+    """Fetch one expiration page's HTML."""
+    response = requests.get(BASE_URL + path, headers=HEADERS, timeout=timeout)
+    response.raise_for_status()
+    return response.text
+
+
+def parse_chain(html):
+    """Parse one expiration page into a DataFrame, one row per strike."""
+    soup = BeautifulSoup(html, "lxml")
+    # Scope to the price table itself: the live page is the full JPX page
+    # (nav, footer, etc.), so stray same-named classes elsewhere on the page
+    # need guarding against.
+    table = soup.find(id="priceTable")
+    if table is None:
+        raise ValueError("couldn't find #priceTable in the fetched page")
+
+    for btn in table.find_all("button"):
+        btn.decompose()
+    for span in table.find_all("span", class_="atm-mark"):
+        span.decompose()
+
+    row_num = table.find_all(class_="row-num")
+    greek_table_wrapper = table.find_all(class_=["greek", "show"])
+    date_table = table.find(class_="last-tradingday")
+    expiration_date = date_table.find("dl").find("dd").text  # YYYY/MM/DD
+
+    records = []
+    for row, greek_table in zip(row_num, greek_table_wrapper):
+        tds = row.find_all("td")
+        # Two <td> elements inside the greek wrapper: call and put tables.
+        tb = greek_table.find_all("td", colspan="8")
+        call_greeks = tb[0].find_all("td", class_="a-right")
+        put_greeks = tb[1].find_all("td", class_="a-right")
+
+        records.append({
+            "Expiry": expiration_date,
+            "Strike": num(tds[8].text),
+            "Call_Volume": num(tds[2].text),
+            "Call_Delta": num(call_greeks[0].text),
+            "Call_Gamma": num(call_greeks[1].text),
+            "Call_OI": num(tds[1].text),
+            "Put_Volume": num(tds[14].text),
+            "Put_Delta": num(put_greeks[0].text),
+            "Put_Gamma": num(put_greeks[1].text),
+            "Put_OI": num(tds[15].text),
+        })
+
+    return pd.DataFrame(records, columns=CHAIN_COLUMNS)
+
+
+def fetch_chain(paths=EXPIRY_PATHS, save_html=False):
+    """Fetch and parse every expiration page into one raw chain DataFrame."""
+    frames = []
+    for path in paths:
+        html = fetch_html(path)
+        if save_html:
+            with open(f"jpx_options_chain_{path or 'base'}.html", "w", encoding="utf-8") as f:
+                f.write(html)
+        frame = parse_chain(html)
+        expiry = frame["Expiry"].iloc[0] if len(frame) else "?"
+        print(f"nkopmini/{path or '(base)'}: expiry {expiry}, {len(frame)} strikes")
+        frames.append(frame)
+
+    chain = pd.concat(frames, ignore_index=True)
+    if chain.empty:
+        raise SystemExit("No option data fetched from any expiration page.")
+    return chain
+
+
+# Column names in the old jpx_scraper.py CSV layout (pandas suffixes the
+# repeated put-side headers with ".1").
+LEGACY_COLUMNS = {
+    "Expiration Date": "Expiry",
+    "Strike": "Strike",
+    "Volume": "Call_Volume",
+    "Delta": "Call_Delta",
+    "Gamma": "Call_Gamma",
+    "Open Interest": "Call_OI",
+    "Volume.1": "Put_Volume",
+    "Delta.1": "Put_Delta",
+    "Gamma.1": "Put_Gamma",
+    "Open Interest.1": "Put_OI",
+}
+
+
+def read_chain_csv(path):
+    """Read a saved chain: either --save-csv output or the old scraper CSV."""
+    raw = pd.read_csv(path)
+    if "Expiration Date" in raw.columns:
+        raw = raw.rename(columns=LEGACY_COLUMNS)
+    missing = [c for c in CHAIN_COLUMNS if c not in raw.columns]
+    if missing:
+        raise ValueError(f"{path}: missing expected columns {missing}")
+    return raw[CHAIN_COLUMNS]
+
+
+# --------------------------------------------------------------------------
+# cleaning
 # --------------------------------------------------------------------------
 
 def parse_expiry(value):
@@ -52,38 +188,20 @@ def parse_expiry(value):
     return None
 
 
-def load_chain(path, asof=None):
-    """Load the scraper CSV into one tidy row per (expiry, strike).
+def prepare_chain(raw, asof=None):
+    """Clean a raw chain into one tidy row per (expiry, strike).
 
-    The scraper writes 0 for cells the exchange shows as "-", so zero deltas
-    and gammas are missing data rather than real zeros and become NaN here.
+    A published greek of exactly 0 is the exchange's rounding floor (or, in
+    old scraper CSVs, a "-" written as 0), so zero deltas and gammas are
+    treated as missing data rather than real zeros and become NaN here.
     """
-    raw = pd.read_csv(path)
+    df = raw[CHAIN_COLUMNS].copy()
+    df["Expiry"] = df["Expiry"].astype(str)
 
-    cols = {
-        "Expiration Date": "Expiry",
-        "Strike": "Strike",
-        "Volume": "Call_Volume",
-        "Delta": "Call_Delta",
-        "Gamma": "Call_Gamma",
-        "Open Interest": "Call_OI",
-        "Volume.1": "Put_Volume",
-        "Delta.1": "Put_Delta",
-        "Gamma.1": "Put_Gamma",
-        "Open Interest.1": "Put_OI",
-    }
-    missing = [c for c in cols if c not in raw.columns]
-    if missing:
-        raise ValueError(f"{path}: missing expected columns {missing}")
-
-    df = raw[list(cols)].rename(columns=cols).copy()
-
-    for col in ("Strike", "Call_Volume", "Call_Delta", "Call_Gamma", "Call_OI",
-                "Put_Volume", "Put_Delta", "Put_Gamma", "Put_OI"):
+    for col in CHAIN_COLUMNS[1:]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    # Older scraper output wrote 0 where the exchange shows "-"; newer output
-    # leaves the cell empty.  Either way the greek is unknown, not zero.
+    # Missing ("-") cells arrive as NaN; zero greeks are unknown too, not zero.
     for col in ("Call_Delta", "Call_Gamma", "Put_Delta", "Put_Gamma"):
         df[col] = df[col].replace(0.0, np.nan)
 
@@ -98,7 +216,7 @@ def load_chain(path, asof=None):
     df["ExpiryDate"] = df["Expiry"].map(parse_expiry)
     if df["ExpiryDate"].isna().any():
         bad = df.loc[df["ExpiryDate"].isna(), "Expiry"].unique()[:3]
-        raise ValueError(f"{path}: unrecognised expiry format(s) {list(bad)}")
+        raise ValueError(f"unrecognised expiry format(s) {list(bad)}")
 
     asof = asof or date.today()
     days = df["ExpiryDate"].map(lambda d: (d - asof).days)
@@ -578,7 +696,10 @@ def show(df, spot, multiplier):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("csv", nargs="?", default="jpx.csv", help="chain CSV (default: jpx.csv)")
+    parser.add_argument("--csv", help="read a saved chain CSV instead of fetching from JPX")
+    parser.add_argument("--save-csv", metavar="PATH", help="write the fetched chain to a CSV")
+    parser.add_argument("--save-html", action="store_true",
+                        help="keep each fetched page as jpx_options_chain_<path>.html")
     parser.add_argument("--spot", type=float, help="underlying price (default: inferred from deltas)")
     parser.add_argument("--asof", type=date.fromisoformat, default=date.today(),
                         help="valuation date, YYYY-MM-DD (default: today)")
@@ -589,7 +710,12 @@ def main(argv=None):
     parser.add_argument("--no-plot", action="store_true", help="print the summary only")
     args = parser.parse_args(argv)
 
-    chain = load_chain(args.csv, asof=args.asof)
+    raw = read_chain_csv(args.csv) if args.csv else fetch_chain(save_html=args.save_html)
+    if args.save_csv:
+        raw.to_csv(args.save_csv, index=False)
+        print(f"Wrote {len(raw)} rows to {args.save_csv}")
+
+    chain = prepare_chain(raw, asof=args.asof)
     spot = args.spot if args.spot is not None else infer_spot(chain)
     if args.spot is None:
         print(f"Spot inferred from deltas: {spot:,.0f}")

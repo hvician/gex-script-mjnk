@@ -3,12 +3,10 @@
 Gamma exposure (GEX) analysis for Nikkei 225 mini options listed on the Japan
 Exchange Group (JPX).
 
-The pipeline has two steps:
-
-1. **`jpx_scraper.py`** fetches the live option chain from JPX and writes it to
-   `jpx.csv`.
-2. **`jpx_gex.py`** reads `jpx.csv`, computes dealer gamma exposure per strike,
-   and plots it along with the gamma flip level and max pain.
+`jpx_gex.py` fetches the live option chain from JPX straight into a pandas
+DataFrame, computes dealer gamma exposure per strike, and plots it along with
+the gamma flip level and max pain. No intermediate file is needed, but the
+chain can be saved to CSV and re-analysed later with `--csv`.
 
 ## What it shows
 
@@ -45,21 +43,24 @@ and put delta both cross 0.5.
 ## Installation
 
 ```
-pip install requests beautifulsoup4 lxml babel pandas numpy scipy matplotlib
+pip install requests beautifulsoup4 lxml pandas numpy scipy matplotlib
 ```
 
 ## Usage
 
 ```
-python jpx_scraper.py              # fetch the chain -> jpx.csv
-python jpx_gex.py                  # summary + interactive chart
+python jpx_gex.py                          # fetch live chain, summary + chart
+python jpx_gex.py --save-csv jpx.csv       # same, and keep a copy of the chain
+python jpx_gex.py --csv jpx.csv --no-plot  # re-analyse a saved chain offline
 ```
 
 `jpx_gex.py` options:
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `csv` | `jpx.csv` | Input chain CSV |
+| `--csv PATH` | fetch live | Read a saved chain instead of fetching |
+| `--save-csv PATH` | off | Write the fetched chain to a CSV |
+| `--save-html` | off | Keep each fetched page as `jpx_options_chain_<path>.html` |
 | `--spot` | inferred | Underlying price |
 | `--asof` | today | Valuation date (`YYYY-MM-DD`), used for time to expiry |
 | `--multiplier` | `100` | Contract multiplier in yen per index point |
@@ -67,7 +68,7 @@ python jpx_gex.py                  # summary + interactive chart
 | `--no-plot` | off | Print the text summary only |
 
 > **Multiplier:** the default of 100 matches the Nikkei 225 **mini** options
-> that the scraper pulls. For a chain of standard Nikkei 225 options, pass
+> that the script fetches. For a chain of standard Nikkei 225 options, pass
 > `--multiplier 1000`.
 
 The console summary lists total call, put and net GEX, the put/call
@@ -76,19 +77,14 @@ largest absolute GEX.
 
 ## Data source
 
-The scraper pulls from `https://svc.qri.jp/jpx/english/nkopmini/<path>`. By
+The script fetches from `https://svc.qri.jp/jpx/english/nkopmini/<path>`. By
 default it fetches the two near-dated expirations: `""` (weekly) and `"1"`
-(standard). Both go into one `jpx.csv`, and each row is tagged with its
+(standard). Both go into one DataFrame, and each row is tagged with its
 expiration date. To pull further-out expirations, add more paths (`"2"` to
-`"5"`) to `EXPIRY_PATHS` in `jpx_scraper.py`.
+`"5"`) to `EXPIRY_PATHS` in `jpx_gex.py`.
 
 JPX's server rejects requests that have no `Referer` header from its own
-domain, so the scraper sends `Referer: https://www.jpx.co.jp/english/`. The
-raw HTML of each page is saved as `jpx_options_chain_<path>.html` for
-debugging. These files and `jpx.csv` are git-ignored.
-
-## Other files
-
-- **`jpx-GEXbot6.py`**: an older interactive GEX tool written for SPX
-  (CBOE "quotedata" CSV exports). It asks for the file path and spot price at
-  the prompt and needs PyQt5 and tkinter. It is not part of the JPX pipeline.
+domain, so the script sends `Referer: https://www.jpx.co.jp/english/`. With
+`--save-html`, the raw HTML of each page is saved as
+`jpx_options_chain_<path>.html` for debugging. These files and `jpx.csv` are
+git-ignored. `--csv` also reads CSVs written by the old `jpx_scraper.py`.
