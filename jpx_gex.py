@@ -451,6 +451,17 @@ def max_pain(df):
 # plotting
 # --------------------------------------------------------------------------
 
+# How many of the largest |net GEX| strikes get a labelled tick on the
+# strike axis and an entry in the footer.
+MAJOR_LEVELS = 12
+
+
+def major_levels(by_strike, count=MAJOR_LEVELS):
+    """The ``count`` strikes with the largest absolute net GEX, largest first."""
+    order = by_strike["Net_GEX"].abs().sort_values(ascending=False).index
+    return by_strike.loc[order].head(count)
+
+
 def _strike_spacing(strikes):
     if len(strikes) < 2:
         return 1.0
@@ -475,6 +486,26 @@ def _fmt_number(value):
 
 def _fmt_gex(value):
     return f"{value / 1e9:+.1f}B"
+
+
+def _draw_colored_footer(fig, rows):
+    """Draw the footer box with some runs of text in colour.
+
+    matplotlib can't colour part of one Text, so the white base text has the
+    coloured runs blanked out and each colour gets its own overlay with
+    everything else blanked. The footer is monospace, so the overlays land
+    exactly in the gaps.
+    """
+    def render(keep):
+        return "\n".join("".join(text if keep(color) else " " * len(text)
+                                 for text, color in row) for row in rows)
+
+    style = dict(fontsize=15, family="monospace", va="bottom", ha="left")
+    fig.text(0.01, 0.01, render(lambda c: c is None), color="white",
+             bbox=dict(facecolor="black", alpha=0.8, edgecolor="white"), **style)
+    for color in {c for row in rows for _, c in row if c is not None}:
+        fig.text(0.01, 0.01, render(lambda c, color=color: c == color),
+                 color=color, fontweight="bold", **style)
 
 
 def draw(fig, ax_gex, ax_vol, df, spot, label, multiplier):
@@ -524,8 +555,11 @@ def draw(fig, ax_gex, ax_vol, df, spot, label, multiplier):
     ax_gex.set_ylabel("Strike", fontsize=18, color="white", labelpad=12)
     ax_gex.set_title(f"Nikkei 225 gamma exposure — {label}", fontsize=22,
                      color="white", pad=18)
-    # Label every strike line rather than thinning to ~20 ticks.
-    ax_gex.yaxis.set_major_locator(ticker.MultipleLocator(_strike_spacing(strikes)))
+    # Only label the major GEX strikes; the crosshair still reads out any strike.
+    major = major_levels(by_strike)
+    major_ticks = np.sort(major["Strike"].to_numpy(float))
+    ax_gex.yaxis.set_major_locator(ticker.FixedLocator(major_ticks))
+    ax_vol.yaxis.set_major_locator(ticker.FixedLocator(major_ticks))
     strike_formatter = ticker.FuncFormatter(lambda v, _: _fmt_number(v))
     ax_gex.yaxis.set_major_formatter(strike_formatter)
     ax_vol.yaxis.set_major_formatter(strike_formatter)
@@ -556,11 +590,33 @@ def draw(fig, ax_gex, ax_vol, df, spot, label, multiplier):
     for text in legend.get_texts():
         text.set_color("white")
 
-    fig.text(0.01, 0.01,
-             f"Net GEX: ¥{net.sum() / 1e9:,.2f}B per 1%   |   "
-             f"{bar_label}: {bars.sum():,.0f} contracts",
-             fontsize=15, color="white",
-             bbox=dict(facecolor="black", alpha=0.8, edgecolor="white"))
+    total = net.sum()
+    positive_major = major[major["Net_GEX"] >= 0]
+    negative_major = major[major["Net_GEX"] < 0]
+
+    def level_rows(name, levels, color, per_line=6):
+        # Each row is a list of (text, colour) runs; None means plain white.
+        entries = [f"{strike:,.0f} {_fmt_gex(gex)}"
+                   for strike, gex in zip(levels["Strike"], levels["Net_GEX"])]
+        if not entries:
+            return [[(f"{name:<15}", None), ("none", None)]]
+        rows = []
+        for i in range(0, len(entries), per_line):
+            row = [(f"{name if i == 0 else '':<15}", None)]
+            for j, entry in enumerate(entries[i:i + per_line]):
+                row += [("   ", None)] * (j > 0) + [(entry, color)]
+            rows.append(row)
+        return rows
+
+    green, red = "#4ade80", "#f87171"
+    footer_rows = [
+        [("Net GEX: ", None),
+         (f"{'+' if total >= 0 else '-'}¥{abs(total) / 1e9:,.2f}B", green if total >= 0 else red),
+         (f" per 1%   |   {bar_label}: {bars.sum():,.0f} contracts", None)],
+        *level_rows("Positive GEX:", positive_major, green),
+        *level_rows("Negative GEX:", negative_major, red),
+    ]
+    _draw_colored_footer(fig, footer_rows)
     fig.canvas.draw_idle()
 
 
@@ -649,8 +705,6 @@ def attach_crosshair(fig, ax_gex, ax_vol):
 def show(df, spot, multiplier):
     plt.style.use("dark_background")
     plt.rcParams["font.family"] = "monospace"
-    # Tall figure so every strike can get its own labelled gridline at a
-    # readable font size instead of matplotlib thinning the ticks.
     fig, (ax_gex, ax_vol) = plt.subplots(
         1, 2, figsize=(18, 22), gridspec_kw={"width_ratios": [1, 0.45]})
     fig.patch.set_facecolor("#1A1A1A")
@@ -671,7 +725,7 @@ def show(df, spot, multiplier):
         crosshair_cids[:] = attach_crosshair(fig, ax_gex, ax_vol)
 
     render(labels[0])
-    fig.tight_layout(rect=(0.0, 0.03, 1.0, 1.0))
+    fig.tight_layout(rect=(0.0, 0.075, 1.0, 1.0))  # room for the 4-line footer
 
     radio = None
     if len(labels) > 1:
