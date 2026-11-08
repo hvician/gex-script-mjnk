@@ -1,4 +1,4 @@
-"""Daily fear gauges for Nikkei 225 mini options: 30-day IV and put skew.
+"""Daily fear gauges for Nikkei 225 options: 30-day IV and put skew.
 
 Each run fetches the JPX chain (or reads a saved one with --csv), measures
 
@@ -12,6 +12,12 @@ Each run fetches the JPX chain (or reads a saved one with --csv), measures
 stores one row per date in a history CSV (re-running on the same date
 replaces that row), prints today against the previous row, and charts the
 whole history with day-over-day changes.
+
+Data comes from the regular Nikkei 225 options pages (nkopm), not the mini
+pages jpx_gex.py uses.  The mini pages list a narrower band of strikes, and
+after a sharp fall the index can sit at the bottom of it, leaving no OTM put
+quotes to measure skew from.  The regular options list a much wider range.
+Both contracts are on the same index, so their implied vols match.
 
 Caveats: implied vol is backed out of published deltas by jpx_gex.py, and
 the smile is fitted only on OTM quotes with delta 0.02-0.30, so ATM IV is
@@ -33,9 +39,12 @@ import pandas as pd
 from jpx_gex import (fetch_html, fit_smile, implied_vol_points, infer_spot,
                      parse_chain, prepare_chain, read_chain_csv)
 
-# Expiry pages to pull.  jpx_gex.py only needs the two nearest, but a 30-day
-# constant-maturity IV needs expiries on both sides of 30 days.
-RISK_PATHS = ["", "1", "2", "3", "4", "5"]
+# Regular Nikkei 225 options: a much wider strike range than the mini pages
+# (nkopmini), so OTM puts are available for skew even after a sharp fall.
+RISK_URL = "https://svc.qri.jp/jpx/english/nkopm/"
+# Expiry pages to pull: a 30-day constant-maturity IV needs expiries on both
+# sides of 30 days.  Pages JPX doesn't currently list are skipped.
+RISK_PATHS = ["", "1", "2"]
 
 HISTORY_COLUMNS = ["date", "spot", "iv_30d", "skew", "skew_expiry", "iv_two_sided"]
 
@@ -56,12 +65,12 @@ def fetch_risk_chain(paths=RISK_PATHS):
     frames = []
     for path in paths:
         try:
-            frame = parse_chain(fetch_html(path))
+            frame = parse_chain(fetch_html(path, base_url=RISK_URL))
         except Exception as exc:  # a missing far page shouldn't kill the run
-            print(f"warning: nkopmini/{path or '(base)'} skipped: {exc}", file=sys.stderr)
+            print(f"warning: nkopm/{path or '(base)'} skipped: {exc}", file=sys.stderr)
             continue
         expiry = frame["Expiry"].iloc[0] if len(frame) else "?"
-        print(f"nkopmini/{path or '(base)'}: expiry {expiry}, {len(frame)} strikes")
+        print(f"nkopm/{path or '(base)'}: expiry {expiry}, {len(frame)} strikes")
         frames.append(frame)
     if not frames:
         raise SystemExit("No option data fetched from any expiration page.")
@@ -160,6 +169,9 @@ def plot_history(hist):
         return
     plt.style.use("dark_background")
     plt.rcParams["font.family"] = "monospace"
+    plt.rcParams["font.size"] = 12
+    plt.rcParams["xtick.labelsize"] = 11
+    plt.rcParams["ytick.labelsize"] = 11
 
     x = np.arange(len(hist))
     iv = hist["iv_30d"].to_numpy(float) * 100
@@ -181,29 +193,42 @@ def plot_history(hist):
         ax.grid(True, color="#333333", linewidth=0.6)
         ax.set_ylabel(title)
         if kind == "line":
+            if np.isnan(values).all():
+                msg = ("no put skew yet (JPX listed no OTM puts)" if values is skew
+                       else "no data yet")
+                ax.text(0.5, 0.5, msg, transform=ax.transAxes, ha="center",
+                        va="center", color="#AAAAAA")
+                ax.set_yticks([])
+                continue
+            size = 30 if len(hist) > 1 else 120  # make a lone first point visible
             ax.plot(x, values, color=color, linewidth=1.8)
-            ax.scatter(x, values, color=color, s=30, zorder=3)
+            ax.scatter(x, values, color=color, s=size, zorder=3)
             if values is iv:  # hollow marker = ATM extrapolated from one wing
                 one = ~hist["iv_two_sided"].astype(str).eq("True").to_numpy()
-                ax.scatter(x[one], values[one], s=30, zorder=4,
+                ax.scatter(x[one], values[one], s=size, zorder=4, linewidths=1.8,
                            facecolor="#1A1A1A", edgecolor=color)
+                if one.any():
+                    ax.text(0.01, 0.95, "○ = one-sided fit (call wing only)",
+                            transform=ax.transAxes, va="top", fontsize=10,
+                            color="#AAAAAA")
             for xi, v in zip(x, values):
                 if not np.isnan(v):
                     ax.annotate(f"{v:.1f}", (xi, v), textcoords="offset points",
-                                xytext=(0, 7), ha="center", fontsize=8, color="#CCCCCC")
+                                xytext=(0, 7), ha="center", fontsize=10, color="#CCCCCC")
         else:
             colors = [UP_COLOR if v > 0 else DOWN_COLOR for v in np.nan_to_num(values)]
             ax.bar(x, np.nan_to_num(values), color=colors, width=0.6)
             ax.axhline(0, color="#888888", linewidth=0.8)
-            if len(hist) < 2:
+            if np.isnan(values).all():
+                ax.set_yticks([])
                 ax.text(0.5, 0.5, "changes need at least 2 days of data",
                         transform=ax.transAxes, ha="center", va="center", color="#AAAAAA")
 
     step = max(1, len(hist) // 20)
     axes[-1].set_xticks(x[::step])
     axes[-1].set_xticklabels(hist["date"].iloc[::step], rotation=45, ha="right")
-    fig.suptitle(f"Nikkei 225 mini - fear gauges  ({hist['date'].iloc[0]} → "
-                 f"{hist['date'].iloc[-1]}, {len(hist)} days)", fontsize=14)
+    fig.suptitle(f"Nikkei 225 options - fear gauges  ({hist['date'].iloc[0]} → "
+                 f"{hist['date'].iloc[-1]}, {len(hist)} days)", fontsize=16)
     fig.tight_layout()
     plt.show()
 

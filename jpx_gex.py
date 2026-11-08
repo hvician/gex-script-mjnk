@@ -76,9 +76,9 @@ def num(text):
     return float(text.replace(",", ""))
 
 
-def fetch_html(path, timeout=15):
+def fetch_html(path, timeout=15, base_url=BASE_URL):
     """Fetch one expiration page's HTML."""
-    response = requests.get(BASE_URL + path, headers=HEADERS, timeout=timeout)
+    response = requests.get(base_url + path, headers=HEADERS, timeout=timeout)
     response.raise_for_status()
     return response.text
 
