@@ -1,3 +1,5 @@
 jpx.csv
 jpx_options_chain_*.html
 __pycache__/
+jpx_risk_history.csv
+history/
